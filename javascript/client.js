@@ -107,8 +107,8 @@ class SrpBigInteger {
     constructor(value) {
         if(value instanceof Uint8Array)
             value = value.reduce((str, byte) => str + byte.toString(16).padStart(2, '0'), '');
-        this._length = value.length;
-        this._bigInt = BigInt("0x"+value);
+        if(!value.startsWith("0x")) value = "0x"+value;
+        this._bigInt = BigInt(value);
     }
 
     _copy() {
@@ -125,14 +125,24 @@ class SrpBigInteger {
         return val;
     }
 
-    // https://stackoverflow.com/questions/5989429/pow-and-mod-function-optimization
-    _expmod(base, exponent, modulus){
-        if (exponent === 0n) return 1n;
-        if (exponent % 2n === 0n) {
-            return (this._expmod(base, (exponent / 2n), modulus) ** 2n) % modulus;
-        } else {
-            return (base * this._expmod(base, (exponent - 1n), modulus)) % modulus;
+    _expmod(base, exponent, modulus) {
+        let res = 1n;
+        base = this._mod(base, modulus);
+        if(base === 0n) return 0n;
+        while(exponent > 0n) {
+            if((exponent & 1n) === 1n) {
+                res = this._mod(res * base, modulus);
+            }
+
+            exponent = exponent >> 1n;
+            base = this._mod(base * base, modulus);
         }
+
+        return res;
+    };
+
+    _mod(x, y) {
+        return ((x % y) + y) % y;
     }
 
     modPow(exponent, modulus) {
@@ -150,18 +160,13 @@ class SrpBigInteger {
     toStringHex() {
         let hex = this._bigInt.toString(16);
         if(hex.length % 2 !== 0) hex = "0"+hex;
-        hex = hex.padStart(this._length, "0");
         return hex;
-    }
-
-    bitLength() {
-        return this._bigInt.toString(2).length;
     }
 
     mod(modulus) {
         modulus = this._getBigInt(modulus);
         let newBigInt = this._copy();
-        newBigInt._bigInt = newBigInt._bigInt % modulus;
+        newBigInt._bigInt = this._mod(newBigInt._bigInt, modulus);
         return newBigInt;
     }
 
@@ -190,7 +195,7 @@ class SrpBigInteger {
         other = this._getBigInt(other);
         let newBigInt = this._copy();
         newBigInt._bigInt = other - newBigInt._bigInt;
-        return newBigInt;
+        return newBigInt._bigInt;
     }
 
     toUint8Array() {
@@ -210,7 +215,7 @@ class SrpClient {
 
     async hashBytes(...bytearrs) {
         let bytearr = concatUint8Arrays(bytearrs);
-        const hashBuffer = await crypto.subtle.digest(this.hash_alg.toUpperCase(), bytearr);
+        const hashBuffer = await window.crypto.subtle.digest(this.hash_alg.toUpperCase(), bytearr);
         return new SrpBigInteger(new Uint8Array(hashBuffer));
     }
 
@@ -254,8 +259,6 @@ class SrpClient {
         let Hg = await this.hashBytes(this.g.toUint8Array());
         let HN = await this.hashBytes(this.N.toUint8Array());
         let HI = await this.hashString(this.username);
-        Hg._length = 64;
-        HN._length = 64;
         let HgU = Hg.toUint8Array();
         let HNU = HN.toUint8Array();
         let HxorU = new Uint8Array(HgU.length);
@@ -263,6 +266,7 @@ class SrpClient {
             HxorU[i] = HgU[i] ^ HNU[i];
         }
         let Hxor = new SrpBigInteger(HxorU);
+
         this.M = await this.hashBytes(
             Hxor.toUint8Array(),
             HI.toUint8Array(),
@@ -289,6 +293,6 @@ class SrpClient {
     }
 
     verify_HAMK(server_HAMK) {
-        return server_HAMK.compareTo(this.H_AMK) === 0;
+        return server_HAMK.compareTo(this.H_AMK) === 0n;
     }
 }
